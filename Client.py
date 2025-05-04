@@ -1,57 +1,63 @@
+#!/usr/bin/env python3
+"""
+ClientPrompt.py
+
+Terminal-based secure UDP chat client with a resilient prompt UI.
+"""
+
 import socket
 import threading
 import base64
 import crypto_utils as cu
+from prompt_toolkit import PromptSession
+from prompt_toolkit.patch_stdout import patch_stdout
 
-SERVER_HOST = '127.0.0.1'   # or replace with your server’s IP
+# Server config
+SERVER_HOST = '127.0.0.1'
 SERVER_PORT = 12345
 BUFFER_SIZE = 4096
 
 def listen_loop(sock, aes_key):
     """
-    Thread: receive AES-encrypted Base64 messages and decrypt/display them.
+    Background thread: receive AES-encrypted Base64 packets,
+    decrypt them, and print above the prompt.
     """
     while True:
-        data, _ = sock.recvfrom(BUFFER_SIZE)
         try:
-            # --- Requirement: Decrypt incoming messages with AES key ---
-            plaintext = cu.decrypt_with_aes(aes_key, data.decode('utf-8'))
-            # --- Requirement: Display chat messages in real time ---
-            print(f"\nFriend: {plaintext}")
+            data, _ = sock.recvfrom(BUFFER_SIZE)
+            msg = cu.decrypt_with_aes(aes_key, data.decode('utf-8'))
+            # A newline lets prompt_toolkit re-draw the prompt cleanly
+            print(f"\nFriend: {msg}")
         except Exception:
-            # ignore bad/decryption errors
             continue
 
 def main():
-    # --- Requirement: Generate an RSA key pair at startup ---
+    # 1) Handshake: RSA keypair → send pubkey → recv & decrypt AES key
     priv, pub = cu.generate_rsa_keypair()
-
-    # Create UDP socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
-    # --- Requirement: Send the public key to the server (Base64-encoded) ---
     sock.sendto(base64.b64encode(pub), (SERVER_HOST, SERVER_PORT))
 
-    # --- Requirement: Receive & decrypt the AES symmetric key using the private key ---
     enc_key_b64, _ = sock.recvfrom(BUFFER_SIZE)
-    enc_key = base64.b64decode(enc_key_b64)
-    aes_key = cu.decrypt_with_rsa(priv, enc_key)
-    print("[+] Received AES key; secure channel established.")
+    aes_key = cu.decrypt_with_rsa(priv, base64.b64decode(enc_key_b64))
+    print("[+] Secure channel established. Start typing below.\n")
 
-    # Start thread to listen for incoming messages
-    listener = threading.Thread(
-        target=listen_loop, args=(sock, aes_key), daemon=True
-    )
-    listener.start()
+    # 2) Start listener thread
+    threading.Thread(target=listen_loop, args=(sock, aes_key), daemon=True).start()
 
-    # Main loop: read user input, encrypt, and send
-    while True:
-        msg = input("You: ")
-        if not msg:
-            continue
-        # --- Requirement: Encrypt outgoing messages with AES key ---
-        b64_ct = cu.encrypt_with_aes(aes_key, msg)
-        sock.sendto(b64_ct.encode('utf-8'), (SERVER_HOST, SERVER_PORT))
+    # 3) Use prompt_toolkit so incoming prints don't break your input
+    session = PromptSession('You: ')
+    with patch_stdout():
+        while True:
+            try:
+                # This prompt will re-draw after any print above
+                msg = session.prompt()
+                if not msg.strip():
+                    continue
+                ct = cu.encrypt_with_aes(aes_key, msg)
+                sock.sendto(ct.encode('utf-8'), (SERVER_HOST, SERVER_PORT))
+            except (KeyboardInterrupt, EOFError):
+                print("\nExiting…")
+                break
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
