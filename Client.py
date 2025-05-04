@@ -1,8 +1,8 @@
-#!/usr/bin/env python3
-"""
-ClientPrompt.py
 
-Terminal-based secure UDP chat client with a resilient prompt UI.
+"""
+Client.py
+
+Terminal-based secure UDP chat client 
 """
 
 import socket
